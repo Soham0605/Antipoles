@@ -150,7 +150,6 @@
         <p><strong>Drag</strong> to rotate | <strong>Single Click</strong> to fly to Antipode | <strong>Double Click</strong> to toggle Flat/Sphere</p>
         
         <div id="controls">
-            <!-- Updated Placeholders to show the new comma-separated format -->
             <label>Lat: <input type="text" id="lat-input" placeholder="e.g. 40,40,12,N"></label>
             <label>Lon: <input type="text" id="lon-input" placeholder="e.g. 73,56,24,W"></label>
             <button id="go-btn">Find Antipode</button>
@@ -191,6 +190,12 @@
                 &lambda;<sub>anti</sub> = <span id="math-lon-val">--</span> &plusmn; 180<br>
                 &lambda;<sub>anti</sub> = <span id="math-lon-out">--</span>&deg;
             </div>
+            
+            <h4>4. Verification</h4>
+            <p>Calculated center of the screen after flight completes:</p>
+            <div class="formula-box" id="verify-box" style="color: white;">
+                Waiting for click...
+            </div>
         </div>
     </div>
 
@@ -205,7 +210,6 @@
                 return floatVal;
             }
 
-            // UPDATED: Regex now explicitly handles commas (,), spaces (\s), or symbols (°'") as valid delimiters
             const dmsRegex = /^(-?\d+(?:\.\d+)?)[°'",\s]*(\d+(?:\.\d+)?)?[°'",\s]*(\d+(?:\.\d+)?)?[°'",\s]*([NSEW])?$/;
             const match = coordStr.match(dmsRegex);
             
@@ -215,7 +219,6 @@
                 let sec = match[3] ? parseFloat(match[3]) : 0;
                 let dir = match[4];
                 
-                // Math works cleanly even if user enters "90" for seconds (e.g., 65,45,90,W)
                 let dec = deg + (min / 60) + (sec / 3600);
                 
                 if (coordStr.startsWith('-') || dir === 'S' || dir === 'W') {
@@ -377,6 +380,10 @@
 
             // --- Interactions ---
             const drag = d3.drag()
+                .on("start", () => {
+                    document.getElementById("verify-box").innerHTML = "Waiting for click...";
+                    document.getElementById("verify-box").style.color = "white";
+                })
                 .on("drag", (event) => {
                     if (!is3D) return;
                     const rotate = currentProj.rotate();
@@ -399,7 +406,6 @@
                     let antiLon = lon > 0 ? lon - 180 : lon + 180;
                     let antiLat = -lat;
 
-                    // Update Main Readout (DMS)
                     let text = `Cursor: Lat ${formatDMS(lat, true)}, Lon ${formatDMS(lon, false)}`;
                     if (!is3D) {
                         text += ` &nbsp;&nbsp;|&nbsp;&nbsp; <span style="color:red">Antipode: Lat ${formatDMS(antiLat, true)}, Lon ${formatDMS(antiLon, false)}</span>`;
@@ -414,7 +420,6 @@
                     }
                     document.getElementById("cursor-readout").innerHTML = text;
 
-                    // --- UPDATE MATH PANEL (Decimals for clean math display) ---
                     document.getElementById("math-lat-in").innerText = lat.toFixed(4);
                     document.getElementById("math-lon-in").innerText = lon.toFixed(4);
                     
@@ -428,7 +433,6 @@
                     document.getElementById("cursor-readout").innerHTML = `Cursor: Lat --, Lon --`;
                     antipodeDot.style("display", "none");
                     
-                    // Clear Math Panel
                     ["math-lat-in", "math-lon-in", "math-lat-val", "math-lat-out", "math-lon-val", "math-lon-out"].forEach(id => {
                         document.getElementById(id).innerText = "--";
                     });
@@ -574,6 +578,11 @@
                 if (yawDiff > 180) targetYaw -= 360;
                 if (yawDiff < -180) targetYaw += 360;
 
+                // Update Verification Box Status
+                const vBox = document.getElementById("verify-box");
+                vBox.innerHTML = "Flying to antipode...";
+                vBox.style.color = "white";
+
                 d3.transition().duration(1200).tween("rotate", function() {
                     const rYaw = d3.interpolate(currentYaw, targetYaw);
                     const rPitch = d3.interpolate(currentPitch, targetPitch);
@@ -581,6 +590,16 @@
                         currentProj.rotate([rYaw(t), rPitch(t), 0]);
                         updateMap3D();
                     };
+                }).on("end", function() {
+                    // VERIFICATION: Check the exact geographical center of the map projection
+                    const centerCoords = currentProj.invert([width / 2, height / 2]);
+                    if (centerCoords) {
+                        let finalLon = ((centerCoords[0] + 180) % 360 + 360) % 360 - 180;
+                        let finalLat = centerCoords[1];
+                        
+                        vBox.innerHTML = `Landed Lat: ${finalLat.toFixed(4)}&deg;<br>Landed Lon: ${finalLon.toFixed(4)}&deg;`;
+                        vBox.style.color = "#00ff00"; // Light up green for success
+                    }
                 });
             }
 
@@ -610,6 +629,9 @@
                     ocean.style("display", "block").transition().duration(1000).style("opacity", 1);
                     gratPath.style("display", "block").transition().duration(1000).attr("d", path3D).style("opacity", 1);
                     antipodeDot.style("display", "none");
+                    
+                    document.getElementById("verify-box").innerHTML = "Waiting for click...";
+                    document.getElementById("verify-box").style.color = "white";
                 } else {
                     basePaths.transition().duration(1000).attr("d", pathFlat);
                     clipPaths.transition().duration(1000).attr("d", pathFlat);
@@ -634,6 +656,9 @@
                     
                     d3.selectAll(".anti-layer").style("display", "block")
                         .transition().delay(800).duration(500).style("opacity", 1);
+                        
+                    document.getElementById("verify-box").innerHTML = "Flat view active (no 3D center).";
+                    document.getElementById("verify-box").style.color = "#ccc";
                 }
             }
         });
