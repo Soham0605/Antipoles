@@ -87,6 +87,7 @@
             min-height: 0;
             box-sizing: border-box;
             padding: 10px;
+            position: relative;
         }
 
         #map-container svg {
@@ -157,8 +158,10 @@
     </div>
 
     <div id="main-content">
+        <!-- Map goes here -->
         <div id="map-container"></div>
         
+        <!-- Math Educational Panel -->
         <div id="math-panel">
             <h3>Antipode Mathematics</h3>
             <p>An antipode is the exact opposite point on the Earth's surface. We calculate this using spherical coordinates.</p>
@@ -187,7 +190,7 @@
             </div>
             
             <h4>4. Verification</h4>
-            <p>Calculated center of the screen after flight completes:</p>
+            <p>Calculated center (crosshair) of the screen after flight completes:</p>
             <div class="formula-box" id="verify-box" style="color: white;">
                 Waiting for click...
             </div>
@@ -244,7 +247,7 @@
         const height = 600;
         let is3D = true;
         let clickTimeout = null;
-        let isFlying = false; // Prevents drag interference during animation
+        let isFlying = false;
 
         const svg = d3.select("#map-container").append("svg")
             .attr("viewBox", `0 0 ${width} ${height}`)
@@ -323,6 +326,7 @@
             .append("g")
             .attr("transform", `matrix(1, 0, 0, -1, 0, ${height})`);
 
+        // Floating red dot for Flat mode tracking
         const antipodeDot = svg.append("circle")
             .attr("r", 5)
             .attr("fill", "red")
@@ -330,6 +334,11 @@
             .attr("stroke-width", 1.5)
             .style("display", "none")
             .style("pointer-events", "none");
+
+        // NEW: Permanent target crosshair at the dead-center of the screen
+        const crosshair = svg.append("g").attr("id", "crosshair").style("pointer-events", "none");
+        crosshair.append("line").attr("x1", width/2 - 12).attr("y1", height/2).attr("x2", width/2 + 12).attr("y2", height/2).attr("stroke", "white").attr("stroke-width", 2);
+        crosshair.append("line").attr("x1", width/2).attr("y1", height/2 - 12).attr("x2", width/2).attr("y2", height/2 + 12).attr("stroke", "white").attr("stroke-width", 2);
 
         d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(function(world) {
             
@@ -551,42 +560,45 @@
             }
 
             function executeAntipodeFlight(lat, lon) {
-                // Prevent exactly 90 degrees to avoid spherical math singularities (divide by zero)
                 if (lat > 89.99) lat = 89.99;
                 if (lat < -89.99) lat = -89.99;
 
                 const antiLon = lon > 0 ? lon - 180 : lon + 180;
                 const antiLat = -lat;
 
-                // Grab the exact center of the map BEFORE flight
-                let currentCenter = currentProj.invert([width / 2, height / 2]);
-                if (!currentCenter) currentCenter = [0, 0];
+                const currentRot = currentProj.rotate();
+                let currentYaw = currentRot[0];
+                let currentPitch = currentRot[1];
 
-                const targetCenter = [antiLon, antiLat];
+                currentYaw = ((currentYaw + 180) % 360 + 360) % 360 - 180;
+                
+                let targetYaw = -antiLon;
+                let targetPitch = -antiLat;
 
-                // D3's Spherical Interpolator traces the exact Great Circle physically on the globe
-                const interpolator = d3.geoInterpolate(currentCenter, targetCenter);
+                let yawDiff = targetYaw - currentYaw;
+                if (yawDiff > 180) targetYaw -= 360;
+                if (yawDiff < -180) targetYaw += 360;
 
                 const vBox = document.getElementById("verify-box");
                 vBox.innerHTML = "Flying to antipode...";
                 vBox.style.color = "white";
                 isFlying = true;
 
+                // Reverted to crash-proof explicit linear tween
                 d3.transition().duration(1200).tween("rotate", function() {
+                    const rYaw = d3.interpolate(currentYaw, targetYaw);
+                    const rPitch = d3.interpolate(currentPitch, targetPitch);
                     return function(t) {
-                        const intermediatePoint = interpolator(t);
-                        // Convert point into a flat [yaw, pitch, roll=0] rotation, completely preventing twists
-                        currentProj.rotate([-intermediatePoint[0], -intermediatePoint[1], 0]);
+                        currentProj.rotate([rYaw(t), rPitch(t), 0]);
                         updateMap3D();
                     };
                 }).on("end", function() {
                     isFlying = false;
-
-                    // SNAP mathematically to the target to eliminate floating-point tween errors
-                    currentProj.rotate([-antiLon, -antiLat, 0]);
+                    
+                    // Snap to mathematical perfection
+                    currentProj.rotate([targetYaw, targetPitch, 0]);
                     updateMap3D();
 
-                    // PROBE the exact dead-center pixel to verify
                     const centerCoords = currentProj.invert([width / 2, height / 2]);
                     if (centerCoords) {
                         let finalLon = ((centerCoords[0] + 180) % 360 + 360) % 360 - 180;
@@ -624,6 +636,7 @@
                     ocean.style("display", "block").transition().duration(1000).style("opacity", 1);
                     gratPath.style("display", "block").transition().duration(1000).attr("d", path3D).style("opacity", 1);
                     antipodeDot.style("display", "none");
+                    crosshair.style("display", "block");
 
                     document.getElementById("verify-box").innerHTML = "Waiting for click...";
                     document.getElementById("verify-box").style.color = "white";
@@ -651,7 +664,8 @@
                     
                     d3.selectAll(".anti-layer").style("display", "block")
                         .transition().delay(800).duration(500).style("opacity", 1);
-
+                        
+                    crosshair.style("display", "none");
                     document.getElementById("verify-box").innerHTML = "Flat view active (no 3D center).";
                     document.getElementById("verify-box").style.color = "#ccc";
                 }
