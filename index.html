@@ -14,11 +14,11 @@
             font-family: sans-serif;
             display: flex;
             flex-direction: column;
-            align-items: center;
             height: 100vh;
             overflow: hidden;
         }
         
+        /* Top Navigation Bar */
         #ui-container {
             text-align: center;
             padding: 15px;
@@ -62,7 +62,6 @@
         }
 
         button:hover { background-color: #1e90ff; }
-
         #locate-btn { background-color: #28a745; }
         #locate-btn:hover { background-color: #218838; }
 
@@ -74,12 +73,19 @@
             min-height: 20px;
         }
 
+        /* Layout for Map and Side Panel */
+        #main-content {
+            display: flex;
+            flex-grow: 1;
+            width: 100%;
+            min-height: 0;
+        }
+
         #map-container {
             flex-grow: 1;
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 100%;
             min-height: 0;
             box-sizing: border-box;
             padding: 10px;
@@ -93,31 +99,46 @@
             cursor: grab;
         }
         #map-container svg:active { cursor: grabbing; }
+
+        /* The New Math Panel */
+        #math-panel {
+            width: 350px;
+            background-color: #1a1a1a;
+            border-left: 2px solid #333;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #math-panel h3 { margin: 0 0 10px 0; color: dodgerblue; border-bottom: 1px solid #333; padding-bottom: 5px; }
+        #math-panel h4 { margin: 0; color: #ff9900; }
+        #math-panel p { margin: 5px 0; font-size: 14px; line-height: 1.4; color: #ddd; }
         
-        .graticule {
-            fill: none;
-            stroke: rgba(255, 255, 255, 0.15);
-            stroke-width: 0.5px;
+        .formula-box {
+            background-color: #000;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 15px;
+            color: #00ff00;
         }
         
+        .math-var { color: white; font-weight: bold; }
+        
+        .graticule { fill: none; stroke: rgba(255, 255, 255, 0.15); stroke-width: 0.5px; }
         .city-point { fill: #00ff00; stroke: #000; stroke-width: 0.5px; }
         .anti-city-point { fill: magenta; stroke: #000; stroke-width: 0.5px; }
         
-        /* Styles for the City Tags */
         .city-label { 
-            fill: #00ff00; 
-            font-size: 11px; 
-            font-family: sans-serif; 
-            font-weight: bold;
-            pointer-events: none; 
+            fill: #00ff00; font-size: 11px; font-family: sans-serif; font-weight: bold; pointer-events: none; 
             text-shadow: 1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black;
         }
         .anti-city-label { 
-            fill: magenta; 
-            font-size: 11px; 
-            font-family: sans-serif; 
-            font-weight: bold;
-            pointer-events: none; 
+            fill: magenta; font-size: 11px; font-family: sans-serif; font-weight: bold; pointer-events: none; 
             text-shadow: 1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black;
         }
     </style>
@@ -138,7 +159,39 @@
         <div id="cursor-readout">Cursor: Lat --, Lon --</div>
     </div>
 
-    <div id="map-container"></div>
+    <div id="main-content">
+        <!-- Map goes here -->
+        <div id="map-container"></div>
+        
+        <!-- New Math Educational Panel -->
+        <div id="math-panel">
+            <h3>Antipode Mathematics</h3>
+            <p>An antipode is the exact opposite point on the Earth's surface. We calculate this using spherical coordinates.</p>
+            
+            <h4>1. Current Coordinates</h4>
+            <p>Latitude (&phi;): <span class="math-var" id="math-lat-in">--</span>&deg;</p>
+            <p>Longitude (&lambda;): <span class="math-var" id="math-lon-in">--</span>&deg;</p>
+            
+            <h4>2. Latitude (&phi;) Inversion</h4>
+            <p>The antipodal latitude is simply inverted across the equator.</p>
+            <div class="formula-box">
+                &phi;<sub>anti</sub> = -(&phi;)<br>
+                &phi;<sub>anti</sub> = -(<span id="math-lat-val">--</span>)<br>
+                &phi;<sub>anti</sub> = <span id="math-lat-out">--</span>&deg;
+            </div>
+
+            <h4>3. Longitude (&lambda;) Shift</h4>
+            <p>The longitude shifts exactly halfway around the globe (180&deg;). We bound the result between -180&deg; and 180&deg;.</p>
+            <div class="formula-box">
+                if (&lambda; > 0):<br>
+                &nbsp;&nbsp;&lambda;<sub>anti</sub> = &lambda; - 180&deg;<br>
+                else:<br>
+                &nbsp;&nbsp;&lambda;<sub>anti</sub> = &lambda; + 180&deg;<br><br>
+                &lambda;<sub>anti</sub> = <span id="math-lon-val">--</span> &plusmn; 180<br>
+                &lambda;<sub>anti</sub> = <span id="math-lon-out">--</span>&deg;
+            </div>
+        </div>
+    </div>
 
     <script>
         // --- DMS Coordinate Parser ---
@@ -195,7 +248,7 @@
             .attr("viewBox", `0 0 ${width} ${height}`)
             .attr("preserveAspectRatio", "xMidYMid meet");
 
-        // --- Top 10 Most Populous Cities (2026 Estimates) ---
+        // --- Top 10 Most Populous Cities ---
         const topCities = [
             { name: "Guangzhou", lat: 23.1291, lon: 113.2644 },
             { name: "Shanghai", lat: 31.2304, lon: 121.4737 },
@@ -298,7 +351,6 @@
                 .data(antiCitiesGeoJSON.features).enter().append("path")
                 .attr("class", "anti-city-point").attr("d", path3D);
 
-            // --- City Labels ---
             const cityLabels = cityDots.selectAll("text")
                 .data(topCities).enter().append("text")
                 .attr("class", "city-label")
@@ -344,10 +396,10 @@
                     let antiLon = lon > 0 ? lon - 180 : lon + 180;
                     let antiLat = -lat;
 
+                    // Update Main Readout (DMS)
                     let text = `Cursor: Lat ${formatDMS(lat, true)}, Lon ${formatDMS(lon, false)}`;
                     if (!is3D) {
                         text += ` &nbsp;&nbsp;|&nbsp;&nbsp; <span style="color:red">Antipode: Lat ${formatDMS(antiLat, true)}, Lon ${formatDMS(antiLon, false)}</span>`;
-
                         const dotPos = projFlat([antiLon, antiLat]);
                         if (dotPos) {
                             antipodeDot.attr("cx", dotPos[0]).attr("cy", dotPos[1]).style("display", "block");
@@ -358,9 +410,25 @@
                         antipodeDot.style("display", "none");
                     }
                     document.getElementById("cursor-readout").innerHTML = text;
+
+                    // --- UPDATE MATH PANEL (Decimals for clean math display) ---
+                    document.getElementById("math-lat-in").innerText = lat.toFixed(4);
+                    document.getElementById("math-lon-in").innerText = lon.toFixed(4);
+                    
+                    document.getElementById("math-lat-val").innerText = lat.toFixed(4);
+                    document.getElementById("math-lat-out").innerText = antiLat.toFixed(4);
+                    
+                    document.getElementById("math-lon-val").innerText = lon.toFixed(4);
+                    document.getElementById("math-lon-out").innerText = antiLon.toFixed(4);
+
                 } else {
                     document.getElementById("cursor-readout").innerHTML = `Cursor: Lat --, Lon --`;
                     antipodeDot.style("display", "none");
+                    
+                    // Clear Math Panel
+                    ["math-lat-in", "math-lon-in", "math-lat-val", "math-lat-out", "math-lon-val", "math-lon-out"].forEach(id => {
+                        document.getElementById(id).innerText = "--";
+                    });
                 }
             });
             
@@ -437,7 +505,6 @@
                 }
             });
 
-            // Initialize Label Coordinates on load
             updateLabels();
 
             // --- Rendering & Animation ---
