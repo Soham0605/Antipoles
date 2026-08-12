@@ -150,8 +150,9 @@
         <p><strong>Drag</strong> to rotate | <strong>Single Click</strong> to fly to Antipode | <strong>Double Click</strong> to toggle Flat/Sphere</p>
         
         <div id="controls">
-            <label>Lat: <input type="text" id="lat-input" placeholder="e.g. 40° 40' 12&quot; N"></label>
-            <label>Lon: <input type="text" id="lon-input" placeholder="e.g. 73° 56' 24&quot; W"></label>
+            <!-- Updated Placeholders to show the new comma-separated format -->
+            <label>Lat: <input type="text" id="lat-input" placeholder="e.g. 40,40,12,N"></label>
+            <label>Lon: <input type="text" id="lon-input" placeholder="e.g. 73,56,24,W"></label>
             <button id="go-btn">Find Antipode</button>
             <button id="locate-btn">Use My Location</button>
         </div>
@@ -163,7 +164,7 @@
         <!-- Map goes here -->
         <div id="map-container"></div>
         
-        <!-- New Math Educational Panel -->
+        <!-- Math Educational Panel -->
         <div id="math-panel">
             <h3>Antipode Mathematics</h3>
             <p>An antipode is the exact opposite point on the Earth's surface. We calculate this using spherical coordinates.</p>
@@ -204,7 +205,8 @@
                 return floatVal;
             }
 
-            const dmsRegex = /^(-?\d+(?:\.\d+)?)[°\s]*(\d+(?:\.\d+)?)?['\s]*(\d+(?:\.\d+)?)?["\s]*([NSEW])?$/;
+            // UPDATED: Regex now explicitly handles commas (,), spaces (\s), or symbols (°'") as valid delimiters
+            const dmsRegex = /^(-?\d+(?:\.\d+)?)[°'",\s]*(\d+(?:\.\d+)?)?[°'",\s]*(\d+(?:\.\d+)?)?[°'",\s]*([NSEW])?$/;
             const match = coordStr.match(dmsRegex);
             
             if (match) {
@@ -213,6 +215,7 @@
                 let sec = match[3] ? parseFloat(match[3]) : 0;
                 let dir = match[4];
                 
+                // Math works cleanly even if user enters "90" for seconds (e.g., 65,45,90,W)
                 let dec = deg + (min / 60) + (sec / 3600);
                 
                 if (coordStr.startsWith('-') || dir === 'S' || dir === 'W') {
@@ -470,7 +473,7 @@
                 if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
                     executeAntipodeFlight(lat, lon);
                 } else {
-                    alert("Please enter valid decimal or DMS coordinates (e.g. 40° 40' 12\" N).");
+                    alert("Please enter valid decimal or comma-separated coordinates (e.g. 40,40,12,N).");
                 }
             });
 
