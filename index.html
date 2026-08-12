@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Earth Antipode Map</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        body {
+            margin: 0;
+            background-color: black;
+            color: white;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #ui-container {
+            text-align: center;
+            padding: 15px;
+            background-color: #111;
+            width: 100%;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+            z-index: 10;
+            flex-shrink: 0;
+            box-sizing: border-box;
+        }
+        
+        h2 { margin: 0 0 5px 0; }
+        p { margin: 5px 0; color: #ccc; }
+        
+        #controls {
+            margin-top: 10px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            align-items: center;
+        }
+
+        input {
+            width: 70px;
+            padding: 5px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            background: #222;
+            color: white;
+            text-align: center;
+        }
+
+        button {
+            padding: 6px 12px;
+            cursor: pointer;
+            background-color: dodgerblue;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        button:hover { background-color: #1e90ff; }
+
+        #cursor-readout {
+            font-family: monospace;
+            color: #00ff00;
+            margin-top: 5px;
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        /* map-container now properly constrains and centers the SVG so it scales
+           to fit the available space instead of rendering at a fixed 1000x600
+           pixel size that gets clipped in narrow preview panes. */
+        #map-container {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+            padding: 10px;
+        }
+
+        #map-container svg {
+            width: 100%;
+            height: 100%;
+            max-width: 1000px;
+            max-height: 100%;
+            cursor: grab;
+        }
+        #map-container svg:active { cursor: grabbing; }
+        
+        .graticule {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.15);
+            stroke-width: 0.5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h2>Earth Antipode Viewer</h2>
+        <p><strong>Drag</strong> to rotate | <strong>Single Click</strong> to fly to Antipode | <strong>Double Click</strong> to toggle Flat/Sphere</p>
+        
+        <div id="controls">
+            <label>Lat: <input type="number" id="lat-input" placeholder="e.g. 40.7"></label>
+            <label>Lon: <input type="number" id="lon-input" placeholder="e.g. -74.0"></label>
+            <button id="go-btn">Find Antipode</button>
+        </div>
+        
+        <div id="cursor-readout">Cursor: Lat --, Lon --</div>
+    </div>
+
+    <div id="map-container"></div>
+
+    <script>
+        // ---------------------------------------------------------------
+        // Versor (quaternion) helpers for correct sphere rotation.
+        // Linearly interpolating [yaw, pitch, roll] independently does NOT
+        // trace a great-circle path on a sphere: near the poles the yaw
+        // component becomes degenerate, so a naive tween visually stalls
+        // and can miss the exact target orientation. Converting each
+        // rotation to a quaternion and spherically interpolating (slerp)
+        // fixes this and always lands exactly on the target.
+        // Adapted from the standard d3 "versor" pattern (Jason Davies).
+        // ---------------------------------------------------------------
+        function versor(e) {
+            const l = e[0] * Math.PI / 360,
+                  p = e[1] * Math.PI / 360,
+                  g = e[2] ? e[2] * Math.PI / 360 : 0,
+                  sl = Math.sin(l), cl = Math.cos(l),
+                  sp = Math.sin(p), cp = Math.cos(p),
+                  sg = Math.sin(g), cg = Math.cos(g);
+            return [
+                cl * cp * cg + sl * sp * sg,
+                sl * cp * cg - cl * sp * sg,
+                cl * sp * cg + sl * cp * sg,
+                cl * cp * sg - sl * sp * cg
+            ];
+        }
+
+        versor.rotation = function(q) {
+            return [
+                Math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] * q[1] + q[2] * q[2])) * 180 / Math.PI,
+                Math.asin(Math.max(-1, Math.min(1, 2 * (q[0] * q[2] - q[3] * q[1])))) * 180 / Math.PI,
+                Math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] * q[2] + q[3] * q[3])) * 180 / Math.PI
+            ];
+        };
+
+        versor.interpolate = function(rotA, rotB) {
+            const a = versor(rotA);
+            const b = versor(rotB).slice();
+            let dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
+
+            // Take the shorter path around the 4D hypersphere.
+            if (dot < 0) {
+                for (let i = 0; i < 4; i++) b[i] = -b[i];
+                dot = -dot;
+            }
+
+            // Nearly identical rotations: fall back to normalized lerp
+            // to avoid dividing by ~0 in the slerp formula.
+            if (dot > 0.9995) {
+                return function(t) {
+                    const q = [
+                        a[0] + t * (b[0] - a[0]),
+                        a[1] + t * (b[1] - a[1]),
+                        a[2] + t * (b[2] - a[2]),
+                        a[3] + t * (b[3] - a[3])
+                    ];
+                    const len = Math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+                    return versor.rotation(q.map(x => x / len));
+                };
+            }
+
+            const theta0 = Math.acos(Math.min(1, dot));
+            const sinTheta0 = Math.sin(theta0);
+
+            return function(t) {
+                const theta = theta0 * t;
+                const s0 = Math.cos(theta) - dot * Math.sin(theta) / sinTheta0;
+                const s1 = Math.sin(theta) / sinTheta0;
+                const q = [
+                    a[0]*s0 + b[0]*s1,
+                    a[1]*s0 + b[1]*s1,
+                    a[2]*s0 + b[2]*s1,
+                    a[3]*s0 + b[3]*s1
+                ];
+                return versor.rotation(q);
+            };
+        };
+
+        const width = 1000;
+        const height = 600;
+        let is3D = true;
+        let clickTimeout = null;
+
+        const svg = d3.select("#map-container").append("svg")
+            .attr("viewBox", `0 0 ${width} ${height}`)
+            .attr("preserveAspectRatio", "xMidYMid meet");
+
+        // --- Projections ---
+        const proj3D = d3.geoOrthographic().scale(280).translate([width / 2, height / 2]);
+        const projFlat = d3.geoMercator().scale(140).translate([width / 2, height / 2]);
+        const projAntiFlat = d3.geoMercator().scale(140).translate([width / 2, height / 2]).rotate([180, 0, 0]);
+        
+        let currentProj = proj3D;
+        const path3D = d3.geoPath().projection(proj3D);
+        const pathFlat = d3.geoPath().projection(projFlat);
+        const pathAntiFlat = d3.geoPath().projection(projAntiFlat);
+
+        // --- SVG Layers ---
+        const defs = svg.append("defs");
+        const clipPath = defs.append("clipPath").attr("id", "base-clip");
+        const clipGroup = clipPath.append("g");
+
+        const ocean = svg.append("path")
+            .datum({type: "Sphere"})
+            .attr("class", "sphere")
+            .attr("fill", "dodgerblue")
+            .attr("d", path3D);
+
+        const graticule = d3.geoGraticule();
+        const gratPath = svg.append("path")
+            .datum(graticule)
+            .attr("class", "graticule")
+            .attr("d", path3D);
+
+        const baseLayer = svg.append("g").attr("id", "base-layer");
+
+        const antiLayer = svg.append("g")
+            .attr("class", "anti-layer")
+            .attr("transform", `matrix(1, 0, 0, -1, 0, ${height})`)
+            .style("opacity", 0)
+            .style("display", "none");
+
+        const overlapLayer = svg.append("g")
+            .attr("class", "anti-layer")
+            .attr("clip-path", "url(#base-clip)")
+            .style("opacity", 0)
+            .style("display", "none")
+            .append("g")
+            .attr("transform", `matrix(1, 0, 0, -1, 0, ${height})`);
+
+        // Red dot that tracks the antipode of the cursor position in flat mode.
+        const antipodeDot = svg.append("circle")
+            .attr("r", 5)
+            .attr("fill", "red")
+            .attr("stroke", "white")
+            .attr("stroke-width", 1.5)
+            .style("display", "none")
+            .style("pointer-events", "none");
+
+        // --- Load Data ---
+        d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(function(world) {
+            
+            const landData = topojson.feature(world, world.objects.countries).features
+                .filter(d => d.properties.name !== "Antarctica");
+
+            const basePaths = baseLayer.selectAll("path")
+                .data(landData).enter().append("path")
+                .attr("fill", "white").attr("stroke", "none").attr("d", path3D);
+
+            const clipPaths = clipGroup.selectAll("path")
+                .data(landData).enter().append("path").attr("d", path3D);
+
+            const antiPaths = antiLayer.selectAll("path")
+                .data(landData).enter().append("path")
+                .attr("fill", "dodgerblue").attr("opacity", 0.8).attr("stroke", "none");
+
+            const overlapPaths = overlapLayer.selectAll("path")
+                .data(landData).enter().append("path")
+                .attr("fill", "darkorange").attr("stroke", "none");
+
+            // --- Interactions ---
+            const drag = d3.drag()
+                .on("drag", (event) => {
+                    if (!is3D) return;
+                    const rotate = currentProj.rotate();
+                    let yaw = rotate[0] + event.dx * 0.5;
+                    let pitch = rotate[1] - event.dy * 0.5;
+                    
+                    // Clamp pitch to prevent the globe from tumbling upside down
+                    pitch = Math.max(-90, Math.min(90, pitch));
+                    
+                    currentProj.rotate([yaw, pitch, 0]);
+                    updateMap3D();
+                });
+            svg.call(drag);
+
+            svg.on("mousemove", (event) => {
+                const coords = currentProj.invert(d3.pointer(event));
+                if (coords) {
+                    let lon = coords[0];
+                    lon = ((lon + 180) % 360 + 360) % 360 - 180; // Normalize
+                    let lat = coords[1];
+                    
+                    let antiLon = lon > 0 ? lon - 180 : lon + 180;
+                    let antiLat = -lat;
+
+                    let text = `Cursor: Lat ${lat.toFixed(2)}°, Lon ${lon.toFixed(2)}°`;
+                    if (!is3D) {
+                        text += ` &nbsp;&nbsp;|&nbsp;&nbsp; <span style="color:red">Antipode: Lat ${antiLat.toFixed(2)}°, Lon ${antiLon.toFixed(2)}°</span>`;
+
+                        // Project the antipode coordinate directly onto the same
+                        // flat map and move the red dot there.
+                        const dotPos = projFlat([antiLon, antiLat]);
+                        if (dotPos) {
+                            antipodeDot
+                                .attr("cx", dotPos[0])
+                                .attr("cy", dotPos[1])
+                                .style("display", "block");
+                        } else {
+                            antipodeDot.style("display", "none");
+                        }
+                    } else {
+                        antipodeDot.style("display", "none");
+                    }
+                    document.getElementById("cursor-readout").innerHTML = text;
+                } else {
+                    document.getElementById("cursor-readout").innerHTML = `Cursor: Lat --, Lon --`;
+                    antipodeDot.style("display", "none");
+                }
+            });
+            
+            svg.on("mouseleave", () => {
+                document.getElementById("cursor-readout").innerHTML = `Cursor: Lat --, Lon --`;
+                antipodeDot.style("display", "none");
+            });
+
+            svg.on("click", (event) => {
+                if (clickTimeout !== null) {
+                    clearTimeout(clickTimeout);
+                    clickTimeout = null;
+                    toggleProjection();
+                } else {
+                    clickTimeout = setTimeout(() => {
+                        if (is3D) {
+                            const coords = currentProj.invert(d3.pointer(event));
+                            if (coords) {
+                                executeAntipodeFlight(coords[1], coords[0]);
+                            }
+                        }
+                        clickTimeout = null;
+                    }, 250);
+                }
+            });
+
+            document.getElementById("go-btn").addEventListener("click", () => {
+                if (!is3D) {
+                    alert("Switch to 3D sphere mode (double-click map) to fly to coordinates.");
+                    return;
+                }
+                const lat = parseFloat(document.getElementById("lat-input").value);
+                const lon = parseFloat(document.getElementById("lon-input").value);
+                
+                if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+                    executeAntipodeFlight(lat, lon);
+                } else {
+                    alert("Please enter valid coordinates (Lat: -90 to 90, Lon: -180 to 180)");
+                }
+            });
+
+            // --- Rendering & Animation ---
+            function updateMap3D() {
+                ocean.attr("d", path3D);
+                gratPath.attr("d", path3D);
+                basePaths.attr("d", path3D);
+                clipPaths.attr("d", path3D);
+            }
+
+            function executeAntipodeFlight(lat, lon) {
+                // Snap to pole if clicked very close to the edge (fixes pixel distortion)
+                if (lat > 89.9) lat = 90;
+                if (lat < -89.9) lat = -90;
+
+                const antiLon = lon > 0 ? lon - 180 : lon + 180;
+                const antiLat = -lat;
+
+                const currentRot = currentProj.rotate();
+                // To center a (lat, lon) point in view, rotate = [-lon, -lat, 0].
+                const targetRot = [-antiLon, -antiLat, 0];
+
+                const interpolator = versor.interpolate(currentRot, targetRot);
+
+                d3.transition().duration(1200).tween("rotate", function() {
+                    return function(t) {
+                        currentProj.rotate(interpolator(t));
+                        updateMap3D();
+                    };
+                });
+            }
+
+            function toggleProjection() {
+                is3D = !is3D;
+                currentProj = is3D ? proj3D : projFlat;
+                
+                if (is3D) {
+                    basePaths.transition().duration(1000).attr("d", path3D);
+                    clipPaths.transition().duration(1000).attr("d", path3D);
+                    
+                    d3.selectAll(".anti-layer").transition().duration(300).style("opacity", 0)
+                        .on("end", function() { d3.select(this).style("display", "none"); });
+                    
+                    ocean.style("display", "block").transition().duration(1000).style("opacity", 1);
+                    gratPath.style("display", "block").transition().duration(1000).attr("d", path3D).style("opacity", 1);
+
+                    antipodeDot.style("display", "none");
+                } else {
+                    basePaths.transition().duration(1000).attr("d", pathFlat);
+                    clipPaths.transition().duration(1000).attr("d", pathFlat);
+                    
+                    antiPaths.attr("d", pathAntiFlat);
+                    overlapPaths.attr("d", pathAntiFlat);
+                    
+                    ocean.transition().duration(300).style("opacity", 0)
+                        .on("end", function() { d3.select(this).style("display", "none"); });
+                    gratPath.transition().duration(1000).attr("d", pathFlat).style("opacity", 0)
+                        .on("end", function() { d3.select(this).style("display", "none"); });
+                    
+                    d3.selectAll(".anti-layer").style("display", "block")
+                        .transition().delay(800).duration(500).style("opacity", 1);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
