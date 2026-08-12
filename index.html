@@ -18,7 +18,6 @@
             overflow: hidden;
         }
         
-        /* Top Navigation Bar */
         #ui-container {
             text-align: center;
             padding: 15px;
@@ -73,7 +72,6 @@
             min-height: 20px;
         }
 
-        /* Layout for Map and Side Panel */
         #main-content {
             display: flex;
             flex-grow: 1;
@@ -100,7 +98,6 @@
         }
         #map-container svg:active { cursor: grabbing; }
 
-        /* The New Math Panel */
         #math-panel {
             width: 350px;
             background-color: #1a1a1a;
@@ -160,10 +157,8 @@
     </div>
 
     <div id="main-content">
-        <!-- Map goes here -->
         <div id="map-container"></div>
         
-        <!-- Math Educational Panel -->
         <div id="math-panel">
             <h3>Antipode Mathematics</h3>
             <p>An antipode is the exact opposite point on the Earth's surface. We calculate this using spherical coordinates.</p>
@@ -249,12 +244,12 @@
         const height = 600;
         let is3D = true;
         let clickTimeout = null;
+        let isFlying = false; // Prevents drag interference during animation
 
         const svg = d3.select("#map-container").append("svg")
             .attr("viewBox", `0 0 ${width} ${height}`)
             .attr("preserveAspectRatio", "xMidYMid meet");
 
-        // --- Top 10 Most Populous Cities ---
         const topCities = [
             { name: "Guangzhou", lat: 23.1291, lon: 113.2644 },
             { name: "Shanghai", lat: 31.2304, lon: 121.4737 },
@@ -284,7 +279,6 @@
             })
         };
 
-        // --- Projections ---
         const proj3D = d3.geoOrthographic().scale(280).translate([width / 2, height / 2]);
         const projFlat = d3.geoMercator().scale(140).translate([width / 2, height / 2]);
         
@@ -295,7 +289,6 @@
         const projAntiFlat = d3.geoMercator().scale(140).translate([width / 2, height / 2]).rotate([180, 0, 0]);
         const pathAntiFlat = d3.geoPath().projection(projAntiFlat);
 
-        // --- SVG Layers ---
         const defs = svg.append("defs");
         const clipPath = defs.append("clipPath").attr("id", "base-clip");
         const clipGroup = clipPath.append("g");
@@ -313,7 +306,6 @@
             .attr("d", path3D);
 
         const baseLayer = svg.append("g").attr("id", "base-layer");
-
         const cityDots = svg.append("g").attr("id", "cities-layer");
         const antiCityDots = svg.append("g").attr("id", "anti-cities-layer");
 
@@ -339,7 +331,6 @@
             .style("display", "none")
             .style("pointer-events", "none");
 
-        // --- Load Data ---
         d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(function(world) {
             
             const landData = topojson.feature(world, world.objects.countries).features
@@ -381,11 +372,12 @@
             // --- Interactions ---
             const drag = d3.drag()
                 .on("start", () => {
+                    if (isFlying) return;
                     document.getElementById("verify-box").innerHTML = "Waiting for click...";
                     document.getElementById("verify-box").style.color = "white";
                 })
                 .on("drag", (event) => {
-                    if (!is3D) return;
+                    if (!is3D || isFlying) return;
                     const rotate = currentProj.rotate();
                     let yaw = rotate[0] + event.dx * 0.5;
                     let pitch = rotate[1] - event.dy * 0.5;
@@ -448,10 +440,10 @@
                 if (clickTimeout !== null) {
                     clearTimeout(clickTimeout);
                     clickTimeout = null;
-                    toggleProjection();
+                    if (!isFlying) toggleProjection();
                 } else {
                     clickTimeout = setTimeout(() => {
-                        if (is3D) {
+                        if (is3D && !isFlying) {
                             const coords = currentProj.invert(d3.pointer(event));
                             if (coords) {
                                 executeAntipodeFlight(coords[1], coords[0]);
@@ -463,8 +455,8 @@
             });
 
             document.getElementById("go-btn").addEventListener("click", () => {
-                if (!is3D) {
-                    alert("Switch to 3D sphere mode (double-click map) to fly to coordinates.");
+                if (!is3D || isFlying) {
+                    if (!is3D) alert("Switch to 3D sphere mode (double-click map) to fly to coordinates.");
                     return;
                 }
                 
@@ -482,8 +474,8 @@
             });
 
             document.getElementById("locate-btn").addEventListener("click", () => {
-                if (!is3D) {
-                    alert("Switch to 3D sphere mode (double-click map) to fly to coordinates.");
+                if (!is3D || isFlying) {
+                    if (!is3D) alert("Switch to 3D sphere mode (double-click map) to fly to coordinates.");
                     return;
                 }
                 if ("geolocation" in navigator) {
@@ -559,46 +551,49 @@
             }
 
             function executeAntipodeFlight(lat, lon) {
-                if (lat > 89.9) lat = 90;
-                if (lat < -89.9) lat = -90;
+                // Prevent exactly 90 degrees to avoid spherical math singularities (divide by zero)
+                if (lat > 89.99) lat = 89.99;
+                if (lat < -89.99) lat = -89.99;
 
                 const antiLon = lon > 0 ? lon - 180 : lon + 180;
                 const antiLat = -lat;
 
-                const currentRot = currentProj.rotate();
-                let currentYaw = currentRot[0];
-                let currentPitch = currentRot[1];
+                // Grab the exact center of the map BEFORE flight
+                let currentCenter = currentProj.invert([width / 2, height / 2]);
+                if (!currentCenter) currentCenter = [0, 0];
 
-                currentYaw = ((currentYaw + 180) % 360 + 360) % 360 - 180;
-                
-                let targetYaw = -antiLon;
-                let targetPitch = -antiLat;
+                const targetCenter = [antiLon, antiLat];
 
-                let yawDiff = targetYaw - currentYaw;
-                if (yawDiff > 180) targetYaw -= 360;
-                if (yawDiff < -180) targetYaw += 360;
+                // D3's Spherical Interpolator traces the exact Great Circle physically on the globe
+                const interpolator = d3.geoInterpolate(currentCenter, targetCenter);
 
-                // Update Verification Box Status
                 const vBox = document.getElementById("verify-box");
                 vBox.innerHTML = "Flying to antipode...";
                 vBox.style.color = "white";
+                isFlying = true;
 
                 d3.transition().duration(1200).tween("rotate", function() {
-                    const rYaw = d3.interpolate(currentYaw, targetYaw);
-                    const rPitch = d3.interpolate(currentPitch, targetPitch);
                     return function(t) {
-                        currentProj.rotate([rYaw(t), rPitch(t), 0]);
+                        const intermediatePoint = interpolator(t);
+                        // Convert point into a flat [yaw, pitch, roll=0] rotation, completely preventing twists
+                        currentProj.rotate([-intermediatePoint[0], -intermediatePoint[1], 0]);
                         updateMap3D();
                     };
                 }).on("end", function() {
-                    // VERIFICATION: Check the exact geographical center of the map projection
+                    isFlying = false;
+
+                    // SNAP mathematically to the target to eliminate floating-point tween errors
+                    currentProj.rotate([-antiLon, -antiLat, 0]);
+                    updateMap3D();
+
+                    // PROBE the exact dead-center pixel to verify
                     const centerCoords = currentProj.invert([width / 2, height / 2]);
                     if (centerCoords) {
                         let finalLon = ((centerCoords[0] + 180) % 360 + 360) % 360 - 180;
                         let finalLat = centerCoords[1];
                         
                         vBox.innerHTML = `Landed Lat: ${finalLat.toFixed(4)}&deg;<br>Landed Lon: ${finalLon.toFixed(4)}&deg;`;
-                        vBox.style.color = "#00ff00"; // Light up green for success
+                        vBox.style.color = "#00ff00"; 
                     }
                 });
             }
@@ -629,7 +624,7 @@
                     ocean.style("display", "block").transition().duration(1000).style("opacity", 1);
                     gratPath.style("display", "block").transition().duration(1000).attr("d", path3D).style("opacity", 1);
                     antipodeDot.style("display", "none");
-                    
+
                     document.getElementById("verify-box").innerHTML = "Waiting for click...";
                     document.getElementById("verify-box").style.color = "white";
                 } else {
@@ -656,7 +651,7 @@
                     
                     d3.selectAll(".anti-layer").style("display", "block")
                         .transition().delay(800).duration(500).style("opacity", 1);
-                        
+
                     document.getElementById("verify-box").innerHTML = "Flat view active (no 3D center).";
                     document.getElementById("verify-box").style.color = "#ccc";
                 }
