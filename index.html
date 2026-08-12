@@ -42,7 +42,7 @@
         }
 
         input {
-            width: 120px;
+            width: 130px;
             padding: 5px;
             border-radius: 4px;
             border: 1px solid #555;
@@ -63,12 +63,8 @@
 
         button:hover { background-color: #1e90ff; }
 
-        #locate-btn {
-            background-color: #28a745;
-        }
-        #locate-btn:hover {
-            background-color: #218838;
-        }
+        #locate-btn { background-color: #28a745; }
+        #locate-btn:hover { background-color: #218838; }
 
         #cursor-readout {
             font-family: monospace;
@@ -104,9 +100,26 @@
             stroke-width: 0.5px;
         }
         
-        /* New styles for the city dots */
         .city-point { fill: #00ff00; stroke: #000; stroke-width: 0.5px; }
         .anti-city-point { fill: magenta; stroke: #000; stroke-width: 0.5px; }
+        
+        /* Styles for the City Tags */
+        .city-label { 
+            fill: #00ff00; 
+            font-size: 11px; 
+            font-family: sans-serif; 
+            font-weight: bold;
+            pointer-events: none; 
+            text-shadow: 1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black;
+        }
+        .anti-city-label { 
+            fill: magenta; 
+            font-size: 11px; 
+            font-family: sans-serif; 
+            font-weight: bold;
+            pointer-events: none; 
+            text-shadow: 1px 1px 2px black, -1px -1px 2px black, 1px -1px 2px black, -1px 1px 2px black;
+        }
     </style>
 </head>
 <body>
@@ -116,7 +129,6 @@
         <p><strong>Drag</strong> to rotate | <strong>Single Click</strong> to fly to Antipode | <strong>Double Click</strong> to toggle Flat/Sphere</p>
         
         <div id="controls">
-            <!-- Inputs changed from type="number" to type="text" to accept DMS strings -->
             <label>Lat: <input type="text" id="lat-input" placeholder="e.g. 40° 40' 12&quot; N"></label>
             <label>Lon: <input type="text" id="lon-input" placeholder="e.g. 73° 56' 24&quot; W"></label>
             <button id="go-btn">Find Antipode</button>
@@ -130,18 +142,15 @@
 
     <script>
         // --- DMS Coordinate Parser ---
-        // Converts strings like '40° 40' 12" N' or '-40.5' into clean decimal degrees
         function parseCoordinate(coordStr) {
             if (!coordStr) return NaN;
             coordStr = coordStr.trim().toUpperCase();
             
-            // Check if it's already a standard decimal number
             let floatVal = parseFloat(coordStr);
             if (!isNaN(floatVal) && /^-?\d+(\.\d+)?$/.test(coordStr)) {
                 return floatVal;
             }
 
-            // Regex to match Degrees, Minutes, Seconds, and Direction (N/S/E/W)
             const dmsRegex = /^(-?\d+(?:\.\d+)?)[°\s]*(\d+(?:\.\d+)?)?['\s]*(\d+(?:\.\d+)?)?["\s]*([NSEW])?$/;
             const match = coordStr.match(dmsRegex);
             
@@ -153,78 +162,28 @@
                 
                 let dec = deg + (min / 60) + (sec / 3600);
                 
-                // Make negative if South, West, or manually prefixed with a minus
                 if (coordStr.startsWith('-') || dir === 'S' || dir === 'W') {
                     dec = -dec;
                 }
                 return dec;
             }
+            return NaN; 
+        }
+
+        // --- DMS Output Formatter ---
+        function formatDMS(deg, isLat) {
+            if (isNaN(deg)) return "--";
+            const dir = isLat ? (deg >= 0 ? 'N' : 'S') : (deg >= 0 ? 'E' : 'W');
+            let abs = Math.abs(deg);
+            let d = Math.floor(abs);
+            let m = Math.floor((abs - d) * 60);
+            let s = ((abs - d - m / 60) * 3600).toFixed(0);
             
-            return NaN; // Failed to parse
+            if (s === "60") { s = "0"; m += 1; }
+            if (m === 60) { m = 0; d += 1; }
+            
+            return `${d}° ${m}' ${s}" ${dir}`;
         }
-
-        // --- Versor Math for Globe Rotation ---
-        function versor(e) {
-            const l = e[0] * Math.PI / 360,
-                  p = e[1] * Math.PI / 360,
-                  g = e[2] ? e[2] * Math.PI / 360 : 0,
-                  sl = Math.sin(l), cl = Math.cos(l),
-                  sp = Math.sin(p), cp = Math.cos(p),
-                  sg = Math.sin(g), cg = Math.cos(g);
-            return [
-                cl * cp * cg + sl * sp * sg,
-                sl * cp * cg - cl * sp * sg,
-                cl * sp * cg + sl * cp * sg,
-                cl * cp * sg - sl * sp * cg
-            ];
-        }
-
-        versor.rotation = function(q) {
-            return [
-                Math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] * q[1] + q[2] * q[2])) * 180 / Math.PI,
-                Math.asin(Math.max(-1, Math.min(1, 2 * (q[0] * q[2] - q[3] * q[1])))) * 180 / Math.PI,
-                Math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] * q[2] + q[3] * q[3])) * 180 / Math.PI
-            ];
-        };
-
-        versor.interpolate = function(rotA, rotB) {
-            const a = versor(rotA);
-            const b = versor(rotB).slice();
-            let dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
-
-            if (dot < 0) {
-                for (let i = 0; i < 4; i++) b[i] = -b[i];
-                dot = -dot;
-            }
-            if (dot > 0.9995) {
-                return function(t) {
-                    const q = [
-                        a[0] + t * (b[0] - a[0]),
-                        a[1] + t * (b[1] - a[1]),
-                        a[2] + t * (b[2] - a[2]),
-                        a[3] + t * (b[3] - a[3])
-                    ];
-                    const len = Math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-                    return versor.rotation(q.map(x => x / len));
-                };
-            }
-
-            const theta0 = Math.acos(Math.min(1, dot));
-            const sinTheta0 = Math.sin(theta0);
-
-            return function(t) {
-                const theta = theta0 * t;
-                const s0 = Math.cos(theta) - dot * Math.sin(theta) / sinTheta0;
-                const s1 = Math.sin(theta) / sinTheta0;
-                const q = [
-                    a[0]*s0 + b[0]*s1,
-                    a[1]*s0 + b[1]*s1,
-                    a[2]*s0 + b[2]*s1,
-                    a[3]*s0 + b[3]*s1
-                ];
-                return versor.rotation(q);
-            };
-        };
 
         // --- Core Setup ---
         const width = 1000;
@@ -236,21 +195,20 @@
             .attr("viewBox", `0 0 ${width} ${height}`)
             .attr("preserveAspectRatio", "xMidYMid meet");
 
-        // --- Top 10 Most Populous Cities (2026) ---
+        // --- Top 10 Most Populous Cities (2026 Estimates) ---
         const topCities = [
-            { name: "Shanghai", lat: 31.2304, lon: 121.4737 },
-            { name: "Delhi", lat: 28.6139, lon: 77.2090 },
-            { name: "Kinshasa", lat: -4.4419, lon: 15.2663 },
-            { name: "Mumbai", lat: 19.0760, lon: 72.8777 },
-            { name: "Beijing", lat: 39.9042, lon: 116.4074 },
-            { name: "Karachi", lat: 24.8607, lon: 67.0011 },
-            { name: "Shenzhen", lat: 22.5431, lon: 114.0579 },
             { name: "Guangzhou", lat: 23.1291, lon: 113.2644 },
-            { name: "Kano", lat: 12.0022, lon: 8.5920 },
-            { name: "Chengdu", lat: 30.5728, lon: 104.0668 }
+            { name: "Shanghai", lat: 31.2304, lon: 121.4737 },
+            { name: "Tokyo", lat: 35.6762, lon: 139.6503 },
+            { name: "Delhi", lat: 28.6139, lon: 77.2090 },
+            { name: "Jakarta", lat: -6.2088, lon: 106.8456 },
+            { name: "Mumbai", lat: 19.0760, lon: 72.8777 },
+            { name: "Manila", lat: 14.5995, lon: 120.9842 },
+            { name: "Mexico City", lat: 19.4326, lon: -99.1332 },
+            { name: "Seoul", lat: 37.5665, lon: 126.9780 },
+            { name: "Dhaka", lat: 23.8103, lon: 90.4125 }
         ];
 
-        // Convert Cities to GeoJSON for D3 mapping
         const citiesGeoJSON = {
             type: "FeatureCollection",
             features: topCities.map(c => ({
@@ -258,7 +216,6 @@
             }))
         };
 
-        // Convert Antipodes to GeoJSON
         const antiCitiesGeoJSON = {
             type: "FeatureCollection",
             features: topCities.map(c => {
@@ -276,7 +233,6 @@
         const path3D = d3.geoPath().projection(proj3D).pointRadius(4);
         const pathFlat = d3.geoPath().projection(projFlat).pointRadius(4);
 
-        // For the overlapping clipping effect, we use a custom matrix trick rather than math
         const projAntiFlat = d3.geoMercator().scale(140).translate([width / 2, height / 2]).rotate([180, 0, 0]);
         const pathAntiFlat = d3.geoPath().projection(projAntiFlat);
 
@@ -297,21 +253,17 @@
             .attr("class", "graticule")
             .attr("d", path3D);
 
-        // Core Base Layer (White Map)
         const baseLayer = svg.append("g").attr("id", "base-layer");
 
-        // The City Dots Group (Rendered above the base map)
         const cityDots = svg.append("g").attr("id", "cities-layer");
         const antiCityDots = svg.append("g").attr("id", "anti-cities-layer");
 
-        // Blue Antipode Background Map (Hidden in 3D)
         const antiLayer = svg.append("g")
             .attr("class", "anti-layer")
             .attr("transform", `matrix(1, 0, 0, -1, 0, ${height})`)
             .style("opacity", 0)
             .style("display", "none");
 
-        // Orange Overlap Map (Clipped)
         const overlapLayer = svg.append("g")
             .attr("class", "anti-layer")
             .attr("clip-path", "url(#base-clip)")
@@ -338,7 +290,6 @@
                 .data(landData).enter().append("path")
                 .attr("fill", "white").attr("stroke", "none").attr("d", path3D);
 
-            // Create City Paths
             const cityPaths = cityDots.selectAll("path")
                 .data(citiesGeoJSON.features).enter().append("path")
                 .attr("class", "city-point").attr("d", path3D);
@@ -346,6 +297,17 @@
             const antiCityPaths = antiCityDots.selectAll("path")
                 .data(antiCitiesGeoJSON.features).enter().append("path")
                 .attr("class", "anti-city-point").attr("d", path3D);
+
+            // --- City Labels ---
+            const cityLabels = cityDots.selectAll("text")
+                .data(topCities).enter().append("text")
+                .attr("class", "city-label")
+                .text(d => d.name);
+                
+            const antiCityLabels = antiCityDots.selectAll("text")
+                .data(topCities).enter().append("text")
+                .attr("class", "anti-city-label")
+                .text(d => d.name + " (Anti)");
 
             const clipPaths = clipGroup.selectAll("path")
                 .data(landData).enter().append("path").attr("d", path3D);
@@ -382,9 +344,9 @@
                     let antiLon = lon > 0 ? lon - 180 : lon + 180;
                     let antiLat = -lat;
 
-                    let text = `Cursor: Lat ${lat.toFixed(2)}°, Lon ${lon.toFixed(2)}°`;
+                    let text = `Cursor: Lat ${formatDMS(lat, true)}, Lon ${formatDMS(lon, false)}`;
                     if (!is3D) {
-                        text += ` &nbsp;&nbsp;|&nbsp;&nbsp; <span style="color:red">Antipode: Lat ${antiLat.toFixed(2)}°, Lon ${antiLon.toFixed(2)}°</span>`;
+                        text += ` &nbsp;&nbsp;|&nbsp;&nbsp; <span style="color:red">Antipode: Lat ${formatDMS(antiLat, true)}, Lon ${formatDMS(antiLon, false)}</span>`;
 
                         const dotPos = projFlat([antiLon, antiLat]);
                         if (dotPos) {
@@ -431,7 +393,6 @@
                     return;
                 }
                 
-                // Parse the user input using our new function
                 const latStr = document.getElementById("lat-input").value;
                 const lonStr = document.getElementById("lon-input").value;
                 
@@ -459,8 +420,10 @@
                         (position) => {
                             const lat = position.coords.latitude;
                             const lon = position.coords.longitude;
-                            document.getElementById("lat-input").value = lat.toFixed(4);
-                            document.getElementById("lon-input").value = lon.toFixed(4);
+                            
+                            document.getElementById("lat-input").value = formatDMS(lat, true);
+                            document.getElementById("lon-input").value = formatDMS(lon, false);
+                            
                             btn.innerText = originalText;
                             executeAntipodeFlight(lat, lon);
                         },
@@ -474,6 +437,9 @@
                 }
             });
 
+            // Initialize Label Coordinates on load
+            updateLabels();
+
             // --- Rendering & Animation ---
             function updateMap3D() {
                 ocean.attr("d", path3D);
@@ -482,6 +448,40 @@
                 clipPaths.attr("d", path3D);
                 cityPaths.attr("d", path3D);
                 antiCityPaths.attr("d", path3D);
+                updateLabels();
+            }
+            
+            function updateLabels() {
+                cityLabels
+                    .attr("x", d => { const p = currentProj([d.lon, d.lat]); return p ? p[0] + 6 : -100; })
+                    .attr("y", d => { const p = currentProj([d.lon, d.lat]); return p ? p[1] + 3 : -100; })
+                    .style("display", d => {
+                        if (is3D) {
+                            const geoPt = { type: "Point", coordinates: [d.lon, d.lat] };
+                            return path3D(geoPt) ? "block" : "none";
+                        }
+                        return "block";
+                    });
+
+                antiCityLabels
+                    .attr("x", d => { 
+                        let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180;
+                        const p = currentProj([aLon, -d.lat]); 
+                        return p ? p[0] + 6 : -100; 
+                    })
+                    .attr("y", d => { 
+                        let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180;
+                        const p = currentProj([aLon, -d.lat]); 
+                        return p ? p[1] + 3 : -100; 
+                    })
+                    .style("display", d => {
+                        if (is3D) {
+                            let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180;
+                            const geoPt = { type: "Point", coordinates: [aLon, -d.lat] };
+                            return path3D(geoPt) ? "block" : "none";
+                        }
+                        return "block";
+                    });
             }
 
             function executeAntipodeFlight(lat, lon) {
@@ -492,12 +492,23 @@
                 const antiLat = -lat;
 
                 const currentRot = currentProj.rotate();
-                const targetRot = [-antiLon, -antiLat, 0];
-                const interpolator = versor.interpolate(currentRot, targetRot);
+                let currentYaw = currentRot[0];
+                let currentPitch = currentRot[1];
+
+                currentYaw = ((currentYaw + 180) % 360 + 360) % 360 - 180;
+                
+                let targetYaw = -antiLon;
+                let targetPitch = -antiLat;
+
+                let yawDiff = targetYaw - currentYaw;
+                if (yawDiff > 180) targetYaw -= 360;
+                if (yawDiff < -180) targetYaw += 360;
 
                 d3.transition().duration(1200).tween("rotate", function() {
+                    const rYaw = d3.interpolate(currentYaw, targetYaw);
+                    const rPitch = d3.interpolate(currentPitch, targetPitch);
                     return function(t) {
-                        currentProj.rotate(interpolator(t));
+                        currentProj.rotate([rYaw(t), rPitch(t), 0]);
                         updateMap3D();
                     };
                 });
@@ -513,6 +524,16 @@
                     cityPaths.transition().duration(1000).attr("d", path3D);
                     antiCityPaths.transition().duration(1000).attr("d", path3D);
                     
+                    cityLabels.transition().duration(1000)
+                        .attr("x", d => { const p = proj3D([d.lon, d.lat]); return p ? p[0] + 6 : -100; })
+                        .attr("y", d => { const p = proj3D([d.lon, d.lat]); return p ? p[1] + 3 : -100; })
+                        .on("end", updateLabels);
+
+                    antiCityLabels.transition().duration(1000)
+                        .attr("x", d => { let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180; const p = proj3D([aLon, -d.lat]); return p ? p[0] + 6 : -100; })
+                        .attr("y", d => { let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180; const p = proj3D([aLon, -d.lat]); return p ? p[1] + 3 : -100; })
+                        .on("end", updateLabels);
+                    
                     d3.selectAll(".anti-layer").transition().duration(300).style("opacity", 0)
                         .on("end", function() { d3.select(this).style("display", "none"); });
                     
@@ -524,6 +545,14 @@
                     clipPaths.transition().duration(1000).attr("d", pathFlat);
                     cityPaths.transition().duration(1000).attr("d", pathFlat);
                     antiCityPaths.transition().duration(1000).attr("d", pathFlat);
+                    
+                    cityLabels.style("display", "block").transition().duration(1000)
+                        .attr("x", d => { const p = projFlat([d.lon, d.lat]); return p ? p[0] + 6 : -100; })
+                        .attr("y", d => { const p = projFlat([d.lon, d.lat]); return p ? p[1] + 3 : -100; });
+
+                    antiCityLabels.style("display", "block").transition().duration(1000)
+                        .attr("x", d => { let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180; const p = projFlat([aLon, -d.lat]); return p ? p[0] + 6 : -100; })
+                        .attr("y", d => { let aLon = d.lon > 0 ? d.lon - 180 : d.lon + 180; const p = projFlat([aLon, -d.lat]); return p ? p[1] + 3 : -100; });
                     
                     antiPaths.attr("d", pathAntiFlat);
                     overlapPaths.attr("d", pathAntiFlat);
